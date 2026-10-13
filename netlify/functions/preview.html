@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pratinjau – Kelas Pendidikan Teknologi Informasi</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    #pv{position:fixed;right:12px;top:12px;z-index:70;background:#111027;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:18px;padding:9px 11px;font:12px "Plus Jakarta Sans",system-ui;box-shadow:0 6px 20px rgba(0,0,0,.35)}
+    #pv b{display:block;margin-bottom:5px;font-size:11px;opacity:.8}
+    #pv button{border:0;border-radius:99px;padding:5px 11px;margin-right:3px;cursor:pointer;background:#2a2850;color:#fff;font-weight:700}
+    #pv button.on{background:linear-gradient(135deg,#8b5cf6,#ec4899)}
+    @media(max-width:860px){#pv{position:static;margin:10px 12px 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}#pv b{margin:0 4px 0 0}}
+  </style>
+</head>
+<body>
+    <div id="pv"><b>PRATINJAU · data contoh</b>
+    <button data-id="u0">Admin</button><button data-id="m2">Spesial</button><button data-id="m1">Member</button></div>
+  <div id="app"></div>
+  <div id="modal" class="modal" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script>
+  /* Mode pratinjau: data contoh disimpan di localStorage terpisah, tidak menyentuh GitHub */
+  window.PTIK_REMOTE = false;
+  window.PTIK_KEY = 'ptik_preview_db';
+  window.PTIK_SES = 'ptik_preview_ses';
+  (function () {
+    const pad = n => String(n).padStart(2, '0');
+    const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const now = new Date(); now.setHours(12, 0, 0, 0);
+    // 14 hari kerja terakhir (Senin–Jumat), hari ini ikut jika hari kerja
+    const hari = [];
+    for (let d = new Date(now), n = 0; hari.length < 14 && n < 40; d.setDate(d.getDate() - 1), n++) {
+      if (d.getDay() !== 0 && d.getDay() !== 6) hari.unshift(iso(d));
+    }
+    const mon = new Date(now); mon.setDate(mon.getDate() - ((mon.getDay() + 6) % 7));
+    const weeks = [];
+    for (let i = 7; i >= 0; i--) { const d = new Date(mon); d.setDate(d.getDate() - 7 * i); weeks.push(iso(d)); }
+    const nama = ['Andi Pratama', 'Siti Aisyah', 'Budi Santoso', 'Dewi Lestari', 'Rizky Maulana', 'Putri Ayu', 'Fajar Nugroho', 'Nur Hidayah', 'Eko Saputra', 'Maya Sari', 'Yusuf Hakim', 'Lina Marlina'];
+    const users = [{ id: 'u0', nama: 'Erlan Pratama', username: 'admin', pass: 'x', role: 'admin', aktif: true }];
+    nama.forEach((n, i) => users.push({ id: 'm' + (i + 1), nama: n, username: n.split(' ')[0].toLowerCase(), pass: 'x', role: i === 1 || i === 6 ? 'spesial' : 'member', aktif: true }));
+    const absen = {}, kas = {};
+    hari.forEach((d, di) => {
+      absen[d] = {};
+      users.forEach((u, i) => {
+        const rajin = i === 5 ? 3 : i === 9 ? 5 : 1; // anggota ke-5 dan ke-9 sering absen
+        const hadir = ((i * 7 + di * 13) % 10) >= rajin + 1;
+        const hariIni = d === iso(now);
+        if (hariIni && i % 3 === 0) return; // sebagian belum diisi hari ini
+        absen[d][u.id] = hadir;
+      });
+    });
+    weeks.forEach((w, wi) => {
+      kas[w] = { nominal: 5000, paid: {} };
+      users.forEach((u, i) => {
+        const last = wi === weeks.length - 1, rajin = i === 5 ? 3 : i === 9 ? 5 : 1;
+        kas[w].paid[u.id] = ((i * 5 + wi * 11) % 10) >= rajin + 1 && (!last || i % 3 !== 0);
+      });
+    });
+    const t = Date.now(), h = 864e5, m = 36e5;
+    const db = {
+      users, absen, kas, kasNominal: 5000,
+      info: [
+        { id: 'i1', judul: 'Praktikum Jaringan Komputer', isi: 'Praktikum minggu ini di Lab Komputer 2, pukul 08.00. Bawa laptop dan kabel LAN masing-masing.', tanggal: t - h, penulis: 'Siti Aisyah' },
+        { id: 'i2', judul: 'Pengumpulan Tugas Basis Data', isi: 'Tugas ERD dikumpulkan paling lambat Jumat malam melalui grup kelas.', tanggal: t - 3 * h, penulis: 'Erlan Pratama' },
+        { id: 'i3', judul: 'Kas kelas untuk kegiatan seminar', isi: 'Mohon bayar kas mingguan tepat waktu karena akan dipakai untuk konsumsi seminar.', tanggal: t - 6 * h, penulis: 'Siti Aisyah' }
+      ],
+      transaksi: [
+        { id: 't1', tipe: 'masuk', ket: 'Sumbangan alumni', jumlah: 100000, tanggal: t - 20 * h },
+        { id: 't2', tipe: 'keluar', ket: 'Beli spidol dan kertas', jumlah: 45000, tanggal: t - 12 * h },
+        { id: 't3', tipe: 'keluar', ket: 'Fotokopi modul praktikum', jumlah: 60000, tanggal: t - 5 * h }
+      ],
+      log: [
+        { t: t - 20 * 6e4, oleh: 'Erlan Pratama', aksi: 'Menandai semua hadir (hari ini)' },
+        { t: t - 2 * m, oleh: 'Erlan Pratama', aksi: 'Kehadiran Rizky Maulana: Tidak hadir' },
+        { t: t - 3 * m, oleh: 'Siti Aisyah', aksi: 'Kas Andi Pratama (minggu ini): Lunas' },
+        { t: t - 5 * m, oleh: 'Erlan Pratama', aksi: 'Kehadiran Putri Ayu: Hadir' },
+        { t: t - 9 * m, oleh: 'Siti Aisyah', aksi: 'Menambah informasi: Praktikum Jaringan Komputer' },
+        { t: t - 26 * m, oleh: 'Erlan Pratama', aksi: 'Menambah anggota: Lina Marlina' },
+        { t: t - 28 * m, oleh: 'Erlan Pratama', aksi: 'Menandai sisanya tidak hadir (kemarin): 3 orang' }
+      ]
+    };
+    localStorage.setItem('ptik_preview_db', JSON.stringify(db));
+    if (!localStorage.getItem('ptik_preview_ses')) localStorage.setItem('ptik_preview_ses', 'u0');
+  })();
+  </script>
+  <script src="app.js"></script>
+  <script>
+    const cur = localStorage.getItem('ptik_preview_ses');
+    document.querySelectorAll('#pv button').forEach(b => {
+      if (b.dataset.id === cur) b.classList.add('on');
+      b.onclick = () => { localStorage.setItem('ptik_preview_ses', b.dataset.id); location.hash = 'beranda'; location.reload(); };
+    });
+  </script>
+</body>
+</html>
