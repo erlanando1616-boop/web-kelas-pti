@@ -1,7 +1,7 @@
 /* Fungsi server Netlify: menyimpan data kelas sebagai berkas JSON di repository GitHub.
    Variabel lingkungan (Netlify → Site configuration → Environment variables):
      GITHUB_TOKEN   token akses GitHub (izin Contents: Read and write pada repo data)
-     GITHUB_REPO    erlndo1616-boop/kelas-pti-data
+     GITHUB_REPO    contoh: usernameanda/kelas-pti-data
      SESSION_SECRET teks acak panjang untuk menandatangani sesi login
      GITHUB_BRANCH  (opsional) kosong = memakai cabang bawaan repo
      DATA_PATH      (opsional) default: data/db.json
@@ -138,10 +138,41 @@ async function diagnose() {
   add(fmt, fmt ? 'GITHUB_REPO berformat benar.' : 'GITHUB_REPO salah atau kosong. Formatnya harus: username/nama-repo (contoh: budi123/kelas-pti-data).');
   add(SECRET.length >= 16, SECRET.length >= 16 ? 'SESSION_SECRET terisi.' : 'SESSION_SECRET kosong atau terlalu pendek (minimal 16 karakter, disarankan 32).');
   if (!TOKEN || !fmt) return out;
+  const [owner, name] = REPO.split('/');
+  const same = (a, b) => a.toLowerCase() === b.toLowerCase();
 
   try {
+    // 1) Siapa pemilik token & apa jenisnya?
+    let login = '';
+    const u = await ghFetch('https://api.github.com/user');
+    if (u.status === 401) { add(false, explain(new GhError(401, await ghMsg(u)))); return out; }
+    if (u.ok) {
+      login = (await u.json()).login || '';
+      if (login) add(true, `Token ini milik akun GitHub: ${login}.`);
+      const sc = u.headers && u.headers.get ? u.headers.get('x-oauth-scopes') : null;
+      if (sc !== null && sc !== undefined) {
+        const list = sc.split(',').map(x => x.trim()).filter(Boolean);
+        const okRepo = list.includes('repo');
+        add(okRepo, okRepo ? 'Token classic punya scope "repo".' : `Token classic TIDAK punya scope "repo" (scope sekarang: ${list.join(', ') || 'kosong'}). Buat token baru dan centang kotak "repo".`);
+      } else add(true, 'Token berjenis fine-grained: akses ditentukan per repo.');
+    }
+
+    // 2) Apakah repo di GITHUB_REPO terlihat oleh token?
     const r = await ghFetch(REPO_URL());
-    if (!r.ok) { add(false, explain(new GhError(r.status, await ghMsg(r)))); return out; }
+    if (!r.ok) {
+      add(false, explain(new GhError(r.status, await ghMsg(r))));
+      if (r.status === 404 && login) {
+        if (!same(owner, login)) {
+          const alt = await ghFetch(`https://api.github.com/repos/${login}/${name}`);
+          add(false, alt.ok
+            ? `Repo "${name}" DITEMUKAN di akun token (${login}). Ubah GITHUB_REPO di Netlify menjadi ${login}/${name}.`
+            : `Pemilik di GITHUB_REPO ("${owner}") berbeda dengan akun pemilik token ("${login}"). Buat token saat login sebagai ${owner}, atau perbaiki GITHUB_REPO.`);
+        } else {
+          add(false, `Akun sudah cocok (${login}), tetapi repo "${name}" tidak terlihat oleh token. Buka https://github.com/${REPO} saat login sebagai ${login}: jika 404, nama repo salah atau repo belum dibuat; jika terbuka, token tidak punya akses ke repo ini.`);
+        }
+      }
+      return out;
+    }
     const j = await r.json();
     add(true, `Repo ditemukan dan token bisa membukanya (${j.private ? 'privat' : 'PUBLIK, sebaiknya dijadikan privat'}).`);
     if (j.private === false) add(false, 'Repo data berstatus PUBLIK: semua orang bisa membaca data kelas. Ubah menjadi Private di Settings repo.');
@@ -170,7 +201,7 @@ async function diagPage() {
 <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:30px auto;padding:0 16px;line-height:1.5}li{margin:8px 0;list-style:none}.ok{color:#047857}.bad{color:#be123c;font-weight:700}h1{font-size:1.3rem}.box{padding:12px 14px;border-radius:12px;background:${siap ? '#d1fae5' : '#ffe4e6'}}</style></head>
 <body><h1>Cek pengaturan Web Kelas PTI</h1><p class="box">${siap ? '✅ Semua pengaturan terlihat benar. Silakan buka halaman utama dan login.' : '❌ Ada yang perlu diperbaiki (baris bertanda ✘). Perbaiki, lalu deploy ulang dan muat ulang halaman ini.'}</p>
 <ul>${out.map(x => `<li class="${x.ok ? 'ok' : 'bad'}">${x.ok ? '✔' : '✘'} ${h(x.teks)}</li>`).join('')}</ul>
-<p style="color:#666;font-size:.85rem">Halaman ini tidak menampilkan token atau nama repo. Matikan dengan variabel DIAGNOSA = mati.</p></body></html>`;
+<p style="color:#666;font-size:.85rem">Halaman ini tidak pernah menampilkan token. Nama akun/repo hanya muncul pada baris petunjuk saat ada kesalahan. Matikan halaman ini dengan variabel DIAGNOSA = mati.</p></body></html>`;
   return { statusCode: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, body };
 }
 
@@ -248,7 +279,7 @@ exports.handler = async event => {
   } catch (e) {
     if (e.user) return json(e.code || 400, { error: e.user });
     console.error(e);
-    if (e instanceof GhError) return json(502, { error: explain(e), kode: e.status });
+    if (e instanceof GhError) return json(502, { error: explain(e) + ' Untuk detail, buka halaman cek di alamat situs Anda + /.netlify/functions/api', kode: e.status });
     return json(500, { error: 'Terjadi kesalahan di server: ' + (e && e.message ? e.message : 'tidak diketahui') });
   }
 };
