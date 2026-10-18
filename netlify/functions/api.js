@@ -1,7 +1,7 @@
 /* Fungsi server Netlify: menyimpan data kelas sebagai berkas JSON di repository GitHub.
    Variabel lingkungan (Netlify → Site configuration → Environment variables):
      GITHUB_TOKEN   token akses GitHub (izin Contents: Read and write pada repo data)
-     GITHUB_REPO    contoh: usernameanda/kelas-pti-data
+     GITHUB_REPO    erlndo1616-boop/kelas-pti-data
      SESSION_SECRET teks acak panjang untuk menandatangani sesi login
      GITHUB_BRANCH  (opsional) kosong = memakai cabang bawaan repo
      DATA_PATH      (opsional) default: data/db.json
