@@ -2,19 +2,23 @@
    Variabel lingkungan (Netlify → Site configuration → Environment variables):
      GITHUB_TOKEN   token akses GitHub (izin Contents: Read and write pada repo data)
      GITHUB_REPO    contoh: usernameanda/kelas-pti-data
-     GITHUB_BRANCH  (opsional) default: main
-     DATA_PATH      (opsional) default: data/db.json
      SESSION_SECRET teks acak panjang untuk menandatangani sesi login
+     GITHUB_BRANCH  (opsional) kosong = memakai cabang bawaan repo
+     DATA_PATH      (opsional) default: data/db.json
+     DIAGNOSA       (opsional) isi "mati" untuk mematikan halaman cek
+   Buka alamat fungsi ini di browser (GET) untuk melihat halaman cek pengaturan.
 */
 const crypto = require('crypto');
 
-const REPO = process.env.GITHUB_REPO;
-const TOKEN = process.env.GITHUB_TOKEN;
-const BRANCH = process.env.GITHUB_BRANCH || 'main';
-const PATH = process.env.DATA_PATH || 'data/db.json';
-const SECRET = process.env.SESSION_SECRET;
+const clip = s => String(s || '').trim();
+const REPO = clip(process.env.GITHUB_REPO).replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '');
+const TOKEN = clip(process.env.GITHUB_TOKEN);
+const BRANCH = clip(process.env.GITHUB_BRANCH);
+const PATH = clip(process.env.DATA_PATH) || 'data/db.json';
+const SECRET = clip(process.env.SESSION_SECRET);
 
-const GH = () => `https://api.github.com/repos/${REPO}/contents/${PATH}`;
+const REPO_URL = () => `https://api.github.com/repos/${REPO}`;
+const FILE_URL = () => `${REPO_URL()}/contents/${PATH}`;
 const ghHeaders = () => ({
   Authorization: `Bearer ${TOKEN}`,
   Accept: 'application/vnd.github+json',
@@ -50,20 +54,54 @@ function verify(tok) {
 }
 
 /* ---------- GitHub ---------- */
+class GhError extends Error {
+  constructor(status, gh) { super('GitHub ' + status); this.status = status; this.gh = gh || ''; }
+}
+async function ghFetch(url, opt = {}) {
+  try {
+    return await fetch(url, { ...opt, headers: { ...ghHeaders(), ...(opt.headers || {}) } });
+  } catch (e) {
+    throw new GhError(0, String((e && e.message) || e));
+  }
+}
+async function ghMsg(r) {
+  try { return (await r.json()).message || ''; } catch { return ''; }
+}
+function explain(e) {
+  const g = e.gh ? ` (Pesan GitHub: "${e.gh}")` : '';
+  switch (e.status) {
+    case 0: return 'Server tidak dapat menghubungi GitHub. Coba lagi beberapa saat.' + g;
+    case 401: return 'GitHub menolak token (kode 401): token salah, kedaluwarsa, atau ada spasi saat disalin. Buat token baru lalu perbarui GITHUB_TOKEN di Netlify.' + g;
+    case 403: return 'Token tidak punya izin (kode 403): pastikan izin Contents = Read and write dan token dipilihkan untuk repo data.' + g;
+    case 404: return 'Repo atau akses token tidak cocok (kode 404): periksa GITHUB_REPO (format username/nama-repo) dan pastikan token diberi akses ke repo itu.' + g;
+    case 413: return 'Berkas data terlalu besar untuk API GitHub (lebih dari 1 MB).' + g;
+    case 422: return 'GitHub menolak permintaan (kode 422): biasanya nama cabang salah. Hapus GITHUB_BRANCH di Netlify atau isi dengan nama cabang yang benar.' + g;
+    default: return `Gagal mengakses GitHub (kode ${e.status}).` + g;
+  }
+}
+
 async function getFile() {
-  const r = await fetch(`${GH()}?ref=${encodeURIComponent(BRANCH)}`, { headers: ghHeaders() });
+  const q = BRANCH ? `?ref=${encodeURIComponent(BRANCH)}` : '';
+  const r = await ghFetch(FILE_URL() + q);
   if (r.status === 404) return { db: null, sha: null };
-  if (!r.ok) throw new Error('GitHub GET ' + r.status);
+  if (!r.ok) throw new GhError(r.status, await ghMsg(r));
   const j = await r.json();
-  return { db: JSON.parse(Buffer.from(j.content, 'base64').toString('utf8')), sha: j.sha };
+  if (j.encoding === 'none' || typeof j.content !== 'string' || !j.content) throw new GhError(413, '');
+  try {
+    return { db: JSON.parse(Buffer.from(j.content, 'base64').toString('utf8')), sha: j.sha };
+  } catch {
+    throw Object.assign(new Error('json'), { code: 500, user: `Berkas ${PATH} di repo data rusak (bukan JSON yang valid). Perbaiki atau hapus berkas itu di GitHub.` });
+  }
 }
 async function putFile(db, sha, message) {
-  const body = { message, content: Buffer.from(JSON.stringify(db)).toString('base64'), branch: BRANCH };
+  const body = { message, content: Buffer.from(JSON.stringify(db)).toString('base64') };
+  if (BRANCH) body.branch = BRANCH;
   if (sha) body.sha = sha;
-  const r = await fetch(GH(), { method: 'PUT', headers: { ...ghHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (r.status === 409 || r.status === 422) return { conflict: true };
-  if (!r.ok) throw new Error('GitHub PUT ' + r.status);
-  return { sha: (await r.json()).content.sha };
+  const r = await ghFetch(FILE_URL(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.ok) return { sha: (await r.json()).content.sha };
+  const msg = await ghMsg(r);
+  if (r.status === 409 || (r.status === 422 && /\bsha\b/i.test(msg))) return { conflict: true };
+  throw new GhError(r.status, msg);
 }
 function seed() {
   return {
@@ -73,11 +111,16 @@ function seed() {
   };
 }
 async function loadDb() {
-  const f = await getFile();
+  let f = await getFile();
   if (f.db) return f;
   const db = seed();
   const r = await putFile(db, null, 'Inisialisasi data kelas');
-  return r.conflict ? getFile() : { db, sha: r.sha };
+  if (r.conflict) {
+    f = await getFile();
+    if (f.db) return f;
+    throw new GhError(409, 'Gagal membuat berkas data awal.');
+  }
+  return { db, sha: r.sha };
 }
 
 const clean = db => ({ ...db, users: db.users.map(({ pass, ...u }) => u) });
@@ -85,10 +128,58 @@ const pub = u => ({ id: u.id, nama: u.nama, username: u.username, role: u.role }
 const obj = v => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const arr = v => (Array.isArray(v) ? v : []);
 
+/* ---------- Halaman cek pengaturan (GET) ---------- */
+const h = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+async function diagnose() {
+  const out = [];
+  const add = (ok, teks) => out.push({ ok, teks });
+  add(!!TOKEN, TOKEN ? 'GITHUB_TOKEN terisi.' : 'GITHUB_TOKEN KOSONG. Isi di Netlify → Site configuration → Environment variables.');
+  const fmt = /^[\w.-]+\/[\w.-]+$/.test(REPO);
+  add(fmt, fmt ? 'GITHUB_REPO berformat benar.' : 'GITHUB_REPO salah atau kosong. Formatnya harus: username/nama-repo (contoh: budi123/kelas-pti-data).');
+  add(SECRET.length >= 16, SECRET.length >= 16 ? 'SESSION_SECRET terisi.' : 'SESSION_SECRET kosong atau terlalu pendek (minimal 16 karakter, disarankan 32).');
+  if (!TOKEN || !fmt) return out;
+
+  try {
+    const r = await ghFetch(REPO_URL());
+    if (!r.ok) { add(false, explain(new GhError(r.status, await ghMsg(r)))); return out; }
+    const j = await r.json();
+    add(true, `Repo ditemukan dan token bisa membukanya (${j.private ? 'privat' : 'PUBLIK, sebaiknya dijadikan privat'}).`);
+    if (j.private === false) add(false, 'Repo data berstatus PUBLIK: semua orang bisa membaca data kelas. Ubah menjadi Private di Settings repo.');
+    if (j.permissions && j.permissions.push === false) add(false, 'Token hanya bisa MEMBACA repo. Ubah izin Contents menjadi "Read and write" lalu buat ulang token.');
+    else if (j.permissions) add(true, 'Token punya izin menulis ke repo.');
+
+    const br = BRANCH || j.default_branch;
+    const b = await ghFetch(`${REPO_URL()}/branches/${encodeURIComponent(br)}`);
+    if (b.ok) add(true, `Cabang "${br}" ada.`);
+    else add(false, `Cabang "${br}" tidak ditemukan. ${BRANCH ? 'Hapus GITHUB_BRANCH di Netlify atau isi nama cabang yang benar.' : 'Repo kemungkinan masih kosong: tambahkan satu berkas (mis. README) di repo data.'}`);
+
+    const f = await ghFetch(FILE_URL() + (BRANCH ? `?ref=${encodeURIComponent(BRANCH)}` : ''));
+    if (f.ok) add(true, `Berkas data (${PATH}) sudah ada.`);
+    else if (f.status === 404) add(true, `Berkas data (${PATH}) belum ada. Normal: akan dibuat otomatis saat login pertama.`);
+    else add(false, explain(new GhError(f.status, await ghMsg(f))));
+  } catch (e) {
+    add(false, e instanceof GhError ? explain(e) : 'Terjadi kesalahan saat memeriksa GitHub.');
+  }
+  return out;
+}
+async function diagPage() {
+  if (clip(process.env.DIAGNOSA).toLowerCase() === 'mati') return { statusCode: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Halaman cek dimatikan.' };
+  const out = await diagnose();
+  const siap = out.every(x => x.ok);
+  const body = `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cek pengaturan</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:30px auto;padding:0 16px;line-height:1.5}li{margin:8px 0;list-style:none}.ok{color:#047857}.bad{color:#be123c;font-weight:700}h1{font-size:1.3rem}.box{padding:12px 14px;border-radius:12px;background:${siap ? '#d1fae5' : '#ffe4e6'}}</style></head>
+<body><h1>Cek pengaturan Web Kelas PTI</h1><p class="box">${siap ? '✅ Semua pengaturan terlihat benar. Silakan buka halaman utama dan login.' : '❌ Ada yang perlu diperbaiki (baris bertanda ✘). Perbaiki, lalu deploy ulang dan muat ulang halaman ini.'}</p>
+<ul>${out.map(x => `<li class="${x.ok ? 'ok' : 'bad'}">${x.ok ? '✔' : '✘'} ${h(x.teks)}</li>`).join('')}</ul>
+<p style="color:#666;font-size:.85rem">Halaman ini tidak menampilkan token atau nama repo. Matikan dengan variabel DIAGNOSA = mati.</p></body></html>`;
+  return { statusCode: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, body };
+}
+
 /* ---------- Penangan ---------- */
 exports.handler = async event => {
+  if (event.httpMethod === 'GET') return diagPage();
   if (event.httpMethod !== 'POST') return json(405, { error: 'Metode tidak diizinkan.' });
-  if (!REPO || !TOKEN || !SECRET) return json(500, { error: 'Konfigurasi server belum lengkap (GITHUB_TOKEN, GITHUB_REPO, SESSION_SECRET).' });
+  const kurang = [!TOKEN && 'GITHUB_TOKEN', !REPO && 'GITHUB_REPO', !SECRET && 'SESSION_SECRET'].filter(Boolean);
+  if (kurang.length) return json(500, { error: `Konfigurasi server belum lengkap, variabel kosong: ${kurang.join(', ')}. Isi di Netlify lalu deploy ulang.` });
   let req;
   try { req = JSON.parse(event.body || '{}'); } catch { return json(400, { error: 'Permintaan tidak valid.' }); }
 
@@ -155,8 +246,9 @@ exports.handler = async event => {
 
     return json(400, { error: 'Aksi tidak dikenal.' });
   } catch (e) {
-    if (e.user) return json(400, { error: e.user });
+    if (e.user) return json(e.code || 400, { error: e.user });
     console.error(e);
-    return json(502, { error: 'Gagal mengakses penyimpanan GitHub. Periksa token dan nama repository.' });
+    if (e instanceof GhError) return json(502, { error: explain(e), kode: e.status });
+    return json(500, { error: 'Terjadi kesalahan di server: ' + (e && e.message ? e.message : 'tidak diketahui') });
   }
 };
