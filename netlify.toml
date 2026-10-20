@@ -1,0 +1,18 @@
+[build]
+  publish = "public"
+  # Cabang "data" hanya berisi database (data/db.json), tidak perlu di-build.
+  ignore = '[ "$BRANCH" = "data" ]'
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+    X-Robots-Tag = "noindex, nofollow"
